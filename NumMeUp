@@ -1,1 +1,134 @@
+import os
+from flask import Flask, render_template, request, redirect, url_for, Response
+import sqlite3
+import datetime
+import matplotlib.dates as mdates
+from matplotlib.backends.backend_agg import FigureCanvasAgg as FigureCanvas
+from matplotlib.figure import Figure
+import io
+
+# Create a templates directory and save the HTML content
+if not os.path.exists('templates'):
+    os.makedirs('templates')
+
+html_content = """
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Weight Tracker</title>
+</head>
+<body>
+
+<h2>Enter Weight Data</h2>
+<form method="post" action="/">
+    Weight (lbs): <input type="text" name="weight" required><br><br>
+    Time: <input type="time" name="record_time" required><br><br>
+    Date: <input type="date" name="record_date" required><br><br>
+    <input type="submit" value="Submit">
+</form>
+
+<h3>Recorded Weights:</h3>
+<table border="1">
+    <tr>
+        <th>ID</th>
+        <th>Weight</th>
+        <th>Time</th>
+        <th>Date</th>
+        <th>Action</th>
+    </tr>
+    {% for row in data %}
+    <tr>
+        <td>{{ row[0] }}</td>
+        <td>{{ row[1] }}</td>
+        <td>{{ row[2] }}</td>
+        <td>{{ row[3] }}</td>
+        <td><a href="{{ url_for('delete_entry', entry_id=row[0]) }}">Delete</a></td>
+    </tr>
+    {% endfor %}
+</table>
+
+<h3>Weight Visualization:</h3>
+<img src="{{ url_for('plot') }}" alt="Weight Plot">
+
+</body>
+</html>
+"""
+
+with open('templates/index.html', 'w') as f:
+    f.write(html_content)
+
+app = Flask(__name__, template_folder="templates")
+
+# Initialize SQLite database
+def init_db():
+    with sqlite3.connect('weights.db') as conn:
+        cursor = conn.cursor()
+        cursor.execute('''CREATE TABLE IF NOT EXISTS weights
+                         (id INTEGER PRIMARY KEY, 
+                          weight REAL, 
+                          record_time TEXT,
+                          record_date TEXT)''')
+        conn.commit()
+
+init_db()
+
+@app.route('/', methods=['GET', 'POST'])
+def index():
+    if request.method == 'POST':
+        weight = request.form['weight']
+        record_time = request.form['record_time']
+        record_date = request.form['record_date']
+        
+        with sqlite3.connect('weights.db') as conn:
+            cursor = conn.cursor()
+            cursor.execute('INSERT INTO weights (weight, record_time, record_date) VALUES (?, ?, ?)', 
+                           (weight, record_time, record_date))
+            conn.commit()
+        return redirect(url_for('index'))
+    
+    else:
+        with sqlite3.connect('weights.db') as conn:
+            cursor = conn.cursor()
+            cursor.execute('SELECT * FROM weights')
+            data = cursor.fetchall()
+        return render_template('index.html', data=data)
+
+@app.route('/delete/<int:entry_id>')
+def delete_entry(entry_id):
+    with sqlite3.connect('weights.db') as conn:
+        cursor = conn.cursor()
+        cursor.execute('DELETE FROM weights WHERE id=?', (entry_id,))
+        conn.commit()
+    return redirect(url_for('index'))
+
+@app.route('/plot/')
+def plot():
+    with sqlite3.connect('weights.db') as conn:
+        cursor = conn.cursor()
+        cursor.execute('SELECT weight, record_date FROM weights ORDER BY record_date')
+        data = cursor.fetchall()
+
+    if not data:
+        return "No data available"
+
+    dates = [datetime.datetime.strptime(x[1], '%Y-%m-%d').date() for x in data]
+    weights = [x[0] for x in data]
+
+    fig = Figure()
+    axis = fig.add_subplot(1, 1, 1)
+    axis.set_title("Weight over Time")
+    axis.set_xlabel("Date")
+    axis.set_ylabel("Weight (lbs)")
+    axis.plot(dates, weights)
+
+    # Improve x-axis readability
+    fig.autofmt_xdate()
+    axis.fmt_xdata = mdates.DateFormatter('%Y-%m-%d')
+
+    output = io.BytesIO()
+    FigureCanvas(fig).print_png(output)
+    return Response(output.getvalue(), mimetype='image/png')
+
+if __name__ == '__main__':
+    app.run(port=5001, debug=True, use_reloader=False)
 
